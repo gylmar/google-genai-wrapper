@@ -27,20 +27,29 @@ var/
 *.egg
 
 # Editors and IDEs
-.vscode/        # Optional: Uncomment to ignore VS Code specific settings
-.idea/          # For PyCharm/IntelliJ IDEs
+# Optional: Uncomment to ignore VS Code specific settings
+.vscode/
+# For PyCharm/IntelliJ IDEs
+.idea/
 
 # Environment variables
-.env            # Ignore environment variables files
-secrets.toml    # For Streamlit apps
+# Ignore environment variables files
+.env
+# For Streamlit apps
+secrets.toml
+# Prevent accidental commits of env helpers
+local.env
 
 # Testing and caches
-.ruff_cache/    # Ruff linter cache
-.coverage       # Coverage output files
+# Ruff linter cache
+.ruff_cache/
+# Coverage output files
+.coverage
 
 # OS-specific files
-.DS_Store       # macOS
-Thumbs.db       # Windows
+# macOS
+.DS_Store
+# Windows
+Thumbs.db
 
 *.swp
-.DS_Store
