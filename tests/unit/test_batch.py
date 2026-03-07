@@ -64,3 +64,29 @@ def test_run_batch_preserves_order(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert [row["id"] for row in results] == ["a", "b"]
     assert [row["response"] for row in results] == ["ONE", "TWO"]
+
+
+def test_run_batch_error_includes_error_type(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_execute_request(**kwargs: Any) -> Dict[str, Any]:
+        raise RuntimeError("429 rate limit exceeded")
+
+    monkeypatch.setattr(batch, "execute_request", fake_execute_request)
+
+    args = argparse.Namespace(
+        model="gemma-3-1b-it",
+        api_key=None,
+        vertexai=False,
+        project=None,
+        location="us-central1",
+        response_schema=None,
+        cache=False,
+        cache_ttl=0,
+        metrics=False,
+        jobs=1,
+    )
+
+    requests = [{"_line_number": 1, "id": "a", "prompt": "one"}]
+    results = batch.run_batch(requests, args, response_schema=None, base_generation_config=None)
+
+    assert results[0]["ok"] is False
+    assert results[0]["error_type"] == "rate_limit"

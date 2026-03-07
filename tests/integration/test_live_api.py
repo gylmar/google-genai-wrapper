@@ -100,3 +100,27 @@ def test_live_cli_json_quiet_output() -> None:
     assert payload["ok"] is True
     assert payload["model"] == TEST_MODEL
     assert isinstance(payload["response"], str)
+
+
+def test_live_cli_stdin_prompt() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    script_path = repo_root / "call_genai.py"
+
+    cmd = [
+        sys.executable,
+        str(script_path),
+        "--stdin",
+        "--model",
+        TEST_MODEL,
+        "--quiet",
+    ]
+    result = subprocess.run(
+        cmd,
+        input="Reply with exactly one short word.",
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert isinstance(result.stdout, str)
+    assert result.stdout.strip()

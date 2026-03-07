@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .core import execute_request
+from .errors import classify_exception
 from .output import single_output_record
 
 
@@ -132,6 +133,10 @@ def run_batch(
                 response_schema_path=args.response_schema,
                 cache_enabled=args.cache,
                 cache_ttl=args.cache_ttl,
+                retries=getattr(args, "retries", 0),
+                retry_backoff=getattr(args, "retry_backoff", 1.0),
+                timeout_seconds=getattr(args, "timeout", None),
+                json_path=getattr(args, "json_path", None),
             )
             output = single_output_record(result, include_metrics=args.metrics)
             output["line"] = line_number
@@ -143,6 +148,7 @@ def run_batch(
                 "ok": False,
                 "line": line_number,
                 "error": str(exc),
+                "error_type": classify_exception(exc),
             }
             if "id" in item:
                 output["id"] = item["id"]

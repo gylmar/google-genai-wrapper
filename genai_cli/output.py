@@ -19,6 +19,8 @@ def single_output_record(result: Dict[str, Any], include_metrics: bool) -> Dict[
         record["metrics"] = result["metrics"]
     if result.get("validated_json") is not None:
         record["validated_json"] = result["validated_json"]
+    if "selected_json" in result:
+        record["selected"] = result["selected_json"]
     return record
 
 

@@ -1,6 +1,7 @@
 import json
+import re
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, List, Optional, Union
 
 
 def load_json_file(path: str, description: str) -> Any:
@@ -136,3 +137,70 @@ def parse_and_validate_schema_response(
 
     validate_json_schema(parsed_json, response_schema)
     return parsed_json
+
+
+def _parse_json_path_expression(expression: str) -> List[Union[str, int]]:
+    expr = expression.strip()
+    if not expr:
+        raise ValueError("JSON path expression cannot be empty")
+
+    if expr.startswith("$"):
+        expr = expr[1:]
+
+    tokens: List[Union[str, int]] = []
+    pos = 0
+    while pos < len(expr):
+        char = expr[pos]
+        if char == ".":
+            pos += 1
+            start = pos
+            while pos < len(expr) and expr[pos] not in ".[":
+                pos += 1
+            key = expr[start:pos]
+            if not key:
+                raise ValueError(f"Invalid JSON path near index {start}: expected property name")
+            tokens.append(key)
+            continue
+        if char == "[":
+            close = expr.find("]", pos + 1)
+            if close == -1:
+                raise ValueError(f"Invalid JSON path near index {pos}: missing closing ']'")
+            index_token = expr[pos + 1 : close].strip()
+            if not re.fullmatch(r"-?\d+", index_token):
+                raise ValueError(f"Invalid JSON path index '{index_token}'")
+            tokens.append(int(index_token))
+            pos = close + 1
+            continue
+
+        # Allow leading key without "$." prefix.
+        start = pos
+        while pos < len(expr) and expr[pos] not in ".[":
+            pos += 1
+        key = expr[start:pos]
+        if not key:
+            raise ValueError(f"Invalid JSON path near index {start}")
+        tokens.append(key)
+
+    return tokens
+
+
+def extract_json_path(value: Any, expression: str) -> Any:
+    """Extract a value from parsed JSON using a simple dot/bracket path."""
+    current = value
+    tokens = _parse_json_path_expression(expression)
+    for token in tokens:
+        if isinstance(token, int):
+            if not isinstance(current, list):
+                raise ValueError(f"JSON path step [{token}] expected array, got {type(current).__name__}")
+            if token >= len(current) or token < -len(current):
+                raise ValueError(f"JSON path index [{token}] out of bounds")
+            current = current[token]
+            continue
+
+        if not isinstance(current, dict):
+            raise ValueError(f"JSON path step '{token}' expected object, got {type(current).__name__}")
+        if token not in current:
+            raise ValueError(f"JSON path key '{token}' not found")
+        current = current[token]
+
+    return current

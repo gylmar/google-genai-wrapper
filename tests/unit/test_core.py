@@ -1,10 +1,12 @@
 import json
+import time
 from pathlib import Path
 from typing import Any, Dict, List
 
 import pytest
 
 from genai_cli import core
+from genai_cli.errors import TimeoutRequestError
 
 
 def test_build_generation_config_includes_sampling_and_schema() -> None:
@@ -127,3 +129,161 @@ def test_execute_request_retries_without_json_mode(monkeypatch: pytest.MonkeyPat
     assert "response_json_schema" not in (calls[1].get("generation_config") or {})
     assert result["validated_json"] == {"answer": "yes"}
     assert result["cache_hit"] is False
+
+
+def test_execute_request_retries_transient_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: List[Dict[str, Any]] = []
+    sleeps: List[float] = []
+
+    def fake_call_genai(**kwargs: Any) -> Dict[str, Any]:
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise RuntimeError("503 Service unavailable")
+        return {
+            "response_text": "ok",
+            "conversation_id": None,
+            "model": kwargs["model"],
+            "usage_metadata": None,
+            "latency_ms": 3.0,
+        }
+
+    monkeypatch.setattr(core, "call_genai", fake_call_genai)
+    monkeypatch.setattr(core.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    result = core.execute_request(
+        prompt="hello",
+        model="gemma-3-1b-it",
+        api_key=None,
+        stream=False,
+        vertexai=False,
+        project=None,
+        location="us-central1",
+        image_paths=None,
+        file_paths=None,
+        conversation_id=None,
+        generation_config=None,
+        response_schema=None,
+        response_schema_path=None,
+        cache_enabled=False,
+        cache_ttl=0,
+        retries=2,
+        retry_backoff=0.5,
+    )
+
+    assert result["response_text"] == "ok"
+    assert len(calls) == 2
+    assert sleeps == [0.5]
+
+
+def test_execute_request_json_path_extracts_selected_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_call_genai(**kwargs: Any) -> Dict[str, Any]:
+        return {
+            "response_text": '{"answer":{"value":"yes"}}',
+            "conversation_id": None,
+            "model": kwargs["model"],
+            "usage_metadata": None,
+            "latency_ms": 3.0,
+        }
+
+    monkeypatch.setattr(core, "call_genai", fake_call_genai)
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "answer": {
+                "type": "object",
+                "properties": {"value": {"type": "string"}},
+                "required": ["value"],
+            }
+        },
+        "required": ["answer"],
+    }
+
+    result = core.execute_request(
+        prompt="json",
+        model="gemma-3-1b-it",
+        api_key=None,
+        stream=False,
+        vertexai=False,
+        project=None,
+        location="us-central1",
+        image_paths=None,
+        file_paths=None,
+        conversation_id=None,
+        generation_config={"response_mime_type": "application/json", "response_json_schema": schema},
+        response_schema=schema,
+        response_schema_path="schema.json",
+        cache_enabled=False,
+        cache_ttl=0,
+        json_path="$.answer.value",
+    )
+
+    assert result["validated_json"] == {"answer": {"value": "yes"}}
+    assert result["selected_json"] == "yes"
+
+
+def test_execute_request_retries_timeout_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    call_count = 0
+    sleeps: List[float] = []
+
+    def fake_call_genai(**kwargs: Any) -> Dict[str, Any]:
+        nonlocal call_count
+        call_count += 1
+        raise TimeoutRequestError("Request timed out after 0.1 seconds")
+
+    monkeypatch.setattr(core, "call_genai", fake_call_genai)
+    monkeypatch.setattr(core.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    with pytest.raises(TimeoutRequestError):
+        core.execute_request(
+            prompt="timeout",
+            model="gemma-3-1b-it",
+            api_key=None,
+            stream=False,
+            vertexai=False,
+            project=None,
+            location="us-central1",
+            image_paths=None,
+            file_paths=None,
+            conversation_id=None,
+            generation_config=None,
+            response_schema=None,
+            response_schema_path=None,
+            cache_enabled=False,
+            cache_ttl=0,
+            retries=1,
+            retry_backoff=0.25,
+            timeout_seconds=0.1,
+        )
+
+    assert call_count == 2
+    assert sleeps == [0.25]
+
+
+def test_call_genai_honors_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeResponse:
+        text = "ok"
+        parsed = None
+        usage_metadata = None
+
+    class FakeModels:
+        def generate_content(self, **kwargs: Any) -> FakeResponse:
+            time.sleep(0.2)
+            return FakeResponse()
+
+    class FakeClient:
+        models = FakeModels()
+
+    monkeypatch.setattr(core, "get_client", lambda *args, **kwargs: FakeClient())
+    monkeypatch.setattr(core, "prepare_contents", lambda *args, **kwargs: ["prompt"])
+
+    started_at = time.perf_counter()
+    with pytest.raises(TimeoutRequestError):
+        core.call_genai(
+            prompt="hello",
+            model="gemma-3-1b-it",
+            timeout_seconds=0.01,
+        )
+    elapsed = time.perf_counter() - started_at
+
+    assert elapsed < 0.15

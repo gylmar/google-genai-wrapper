@@ -4,11 +4,13 @@ import mimetypes
 import os
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Union
 
 from .common import json_dumps, to_jsonable
-from .schema import parse_and_validate_schema_response
+from .errors import SchemaValidationError, TimeoutRequestError, is_retryable_exception
+from .schema import extract_json_path, parse_and_validate_schema_response
 
 try:
     from google import genai
@@ -362,6 +364,7 @@ def call_genai(
     conversation_id: Optional[str] = None,
     generation_config: Optional[Dict[str, Any]] = None,
     stream_handler: Optional[Any] = None,
+    timeout_seconds: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Call a Google Generative AI model and return normalized response data."""
     client = get_client(api_key, vertexai, project, location)
@@ -370,6 +373,22 @@ def call_genai(
 
     started_at = time.perf_counter()
     usage_metadata: Optional[Dict[str, Any]] = None
+
+    def _run_with_timeout(func: Any) -> Any:
+        if timeout_seconds is None:
+            return func()
+
+        executor = ThreadPoolExecutor(max_workers=1)
+        timed_out = False
+        future = executor.submit(func)
+        try:
+            return future.result(timeout=timeout_seconds)
+        except FuturesTimeoutError as exc:
+            timed_out = True
+            future.cancel()
+            raise TimeoutRequestError(f"Request timed out after {timeout_seconds} seconds") from exc
+        finally:
+            executor.shutdown(wait=not timed_out, cancel_futures=timed_out)
 
     if use_chat:
         conversation_data = load_conversation(conversation_id) if conversation_id else None
@@ -385,21 +404,30 @@ def call_genai(
 
         chat = client.chats.create(model=model, history=history)
 
-        if stream:
-            full_response = ""
-            last_chunk: Optional[genai_types.GenerateContentResponse] = None
-            for chunk in chat.send_message_stream(contents, config=generation_config):
-                last_chunk = chunk
-                if chunk.text:
-                    if stream_handler:
-                        stream_handler(chunk.text)
-                    full_response += chunk.text
-            response_text = full_response
-            usage_metadata = extract_usage_metadata(last_chunk)
-        else:
+        def _chat_call() -> Dict[str, Any]:
+            if stream:
+                full_response = ""
+                last_chunk: Optional[genai_types.GenerateContentResponse] = None
+                for chunk in chat.send_message_stream(contents, config=generation_config):
+                    last_chunk = chunk
+                    if chunk.text:
+                        if stream_handler:
+                            stream_handler(chunk.text)
+                        full_response += chunk.text
+                return {
+                    "response_text": full_response,
+                    "usage_metadata": extract_usage_metadata(last_chunk),
+                }
+
             response = chat.send_message(contents, config=generation_config)
-            response_text = model_response_text(response)
-            usage_metadata = extract_usage_metadata(response)
+            return {
+                "response_text": model_response_text(response),
+                "usage_metadata": extract_usage_metadata(response),
+            }
+
+        call_result = _run_with_timeout(_chat_call)
+        response_text = call_result["response_text"]
+        usage_metadata = call_result["usage_metadata"]
 
         save_conversation(conversation_id, chat.get_history(curated=True), model)
         latency_ms = (time.perf_counter() - started_at) * 1000.0
@@ -411,29 +439,38 @@ def call_genai(
             "latency_ms": latency_ms,
         }
 
-    if stream:
-        full_response = ""
-        last_chunk: Optional[genai_types.GenerateContentResponse] = None
-        for chunk in client.models.generate_content_stream(
-            model=model,
-            contents=contents,
-            config=generation_config,
-        ):
-            last_chunk = chunk
-            if chunk.text:
-                if stream_handler:
-                    stream_handler(chunk.text)
-                full_response += chunk.text
-        response_text = full_response
-        usage_metadata = extract_usage_metadata(last_chunk)
-    else:
+    def _model_call() -> Dict[str, Any]:
+        if stream:
+            full_response = ""
+            last_chunk: Optional[genai_types.GenerateContentResponse] = None
+            for chunk in client.models.generate_content_stream(
+                model=model,
+                contents=contents,
+                config=generation_config,
+            ):
+                last_chunk = chunk
+                if chunk.text:
+                    if stream_handler:
+                        stream_handler(chunk.text)
+                    full_response += chunk.text
+            return {
+                "response_text": full_response,
+                "usage_metadata": extract_usage_metadata(last_chunk),
+            }
+
         response = client.models.generate_content(
             model=model,
             contents=contents,
             config=generation_config,
         )
-        response_text = model_response_text(response)
-        usage_metadata = extract_usage_metadata(response)
+        return {
+            "response_text": model_response_text(response),
+            "usage_metadata": extract_usage_metadata(response),
+        }
+
+    call_result = _run_with_timeout(_model_call)
+    response_text = call_result["response_text"]
+    usage_metadata = call_result["usage_metadata"]
 
     latency_ms = (time.perf_counter() - started_at) * 1000.0
     return {
@@ -462,6 +499,10 @@ def execute_request(
     cache_enabled: bool,
     cache_ttl: int,
     stream_handler: Optional[Any] = None,
+    retries: int = 0,
+    retry_backoff: float = 1.0,
+    timeout_seconds: Optional[float] = None,
+    json_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Execute one model request with optional cache lookup."""
     cache_key: Optional[str] = None
@@ -479,11 +520,20 @@ def execute_request(
         cached = read_cached_response(cache_key, cache_ttl)
         if cached:
             response_text = cached.get("response_text", "")
-            validated = parse_and_validate_schema_response(
-                response_text=response_text,
-                response_schema=response_schema,
-                response_schema_path=response_schema_path,
-            )
+            try:
+                validated = parse_and_validate_schema_response(
+                    response_text=response_text,
+                    response_schema=response_schema,
+                    response_schema_path=response_schema_path,
+                )
+            except ValueError as exc:
+                raise SchemaValidationError(str(exc)) from exc
+            selected_json = None
+            if json_path is not None:
+                try:
+                    selected_json = extract_json_path(validated, json_path)
+                except ValueError as exc:
+                    raise SchemaValidationError(f"JSON path extraction failed ({json_path}): {exc}") from exc
             usage_metadata = cached.get("usage_metadata")
             metrics = build_metrics(
                 latency_ms=0.0,
@@ -499,55 +549,84 @@ def execute_request(
                 "metrics": metrics,
                 "validated_json": validated,
                 "cache_hit": True,
+                **({"selected_json": selected_json} if json_path is not None else {}),
             }
 
     effective_config = dict(generation_config or {})
+    last_exc: Optional[Exception] = None
+    result: Optional[Dict[str, Any]] = None
+    for attempt in range(retries + 1):
+        try:
+            try:
+                result = call_genai(
+                    prompt=prompt,
+                    model=model,
+                    api_key=api_key,
+                    stream=stream,
+                    vertexai=vertexai,
+                    project=project,
+                    location=location,
+                    image_paths=image_paths,
+                    file_paths=file_paths,
+                    conversation_id=conversation_id,
+                    generation_config=effective_config or None,
+                    stream_handler=stream_handler,
+                    timeout_seconds=timeout_seconds,
+                )
+            except Exception as exc:
+                error_text = str(exc).lower()
+                has_json_mode = "response_json_schema" in effective_config or "response_mime_type" in effective_config
+                if response_schema is None or not has_json_mode:
+                    raise
+                if "json mode is not enabled" not in error_text and "invalid_argument" not in error_text:
+                    raise
+
+                fallback_config = dict(effective_config)
+                fallback_config.pop("response_json_schema", None)
+                fallback_config.pop("response_mime_type", None)
+                result = call_genai(
+                    prompt=prompt,
+                    model=model,
+                    api_key=api_key,
+                    stream=stream,
+                    vertexai=vertexai,
+                    project=project,
+                    location=location,
+                    image_paths=image_paths,
+                    file_paths=file_paths,
+                    conversation_id=conversation_id,
+                    generation_config=fallback_config or None,
+                    stream_handler=stream_handler,
+                    timeout_seconds=timeout_seconds,
+                )
+            break
+        except Exception as exc:
+            last_exc = exc
+            if attempt >= retries or not is_retryable_exception(exc):
+                raise
+            sleep_seconds = retry_backoff * (2 ** attempt)
+            time.sleep(sleep_seconds)
+
+    if result is None:
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("Request failed before receiving a response")
+
     try:
-        result = call_genai(
-            prompt=prompt,
-            model=model,
-            api_key=api_key,
-            stream=stream,
-            vertexai=vertexai,
-            project=project,
-            location=location,
-            image_paths=image_paths,
-            file_paths=file_paths,
-            conversation_id=conversation_id,
-            generation_config=effective_config or None,
-            stream_handler=stream_handler,
+        validated_json = parse_and_validate_schema_response(
+            response_text=result["response_text"],
+            response_schema=response_schema,
+            response_schema_path=response_schema_path,
         )
-    except Exception as exc:
-        error_text = str(exc).lower()
-        has_json_mode = "response_json_schema" in effective_config or "response_mime_type" in effective_config
-        if response_schema is None or not has_json_mode:
-            raise
-        if "json mode is not enabled" not in error_text and "invalid_argument" not in error_text:
-            raise
+    except ValueError as exc:
+        raise SchemaValidationError(str(exc)) from exc
 
-        fallback_config = dict(effective_config)
-        fallback_config.pop("response_json_schema", None)
-        fallback_config.pop("response_mime_type", None)
-        result = call_genai(
-            prompt=prompt,
-            model=model,
-            api_key=api_key,
-            stream=stream,
-            vertexai=vertexai,
-            project=project,
-            location=location,
-            image_paths=image_paths,
-            file_paths=file_paths,
-            conversation_id=conversation_id,
-            generation_config=fallback_config or None,
-            stream_handler=stream_handler,
-        )
-
-    validated_json = parse_and_validate_schema_response(
-        response_text=result["response_text"],
-        response_schema=response_schema,
-        response_schema_path=response_schema_path,
-    )
+    selected_json = None
+    if json_path is not None:
+        try:
+            selected_json = extract_json_path(validated_json, json_path)
+        except ValueError as exc:
+            raise SchemaValidationError(f"JSON path extraction failed ({json_path}): {exc}") from exc
 
     if cache_key:
         write_cached_response(
@@ -574,4 +653,5 @@ def execute_request(
         "metrics": metrics,
         "validated_json": validated_json,
         "cache_hit": False,
+        **({"selected_json": selected_json} if json_path is not None else {}),
     }

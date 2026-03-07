@@ -37,9 +37,19 @@ pip install -r requirements.txt                  # install project + test depend
    ```bash
    python call_genai.py "Summarize the README" --model gemini-2.5-flash
    python call_genai.py "Compare these images" --image example.jpg --model gemma-3-14b
+   printf "Extract one action item" | python call_genai.py --stdin --model gemma-3-1b-it --profile extract --quiet
+   python call_genai.py --prompt-file prompt.txt --instruction-file system.txt --model gemma-3-1b-it --retries 2 --timeout 20
+   python call_genai.py "Return JSON" --model gemma-3-1b-it --response-schema schema.json --json-path '$.result.value' --quiet
    ```
 
-The script supports streaming (`--stream`), document input (`--file`), conversations (`--conversation-id`), and Vertex AI mode (`--vertexai --project ... --location ...`) as documented in `call_genai.py --help`.
+The script supports streaming (`--stream`), document input (`--file`), conversations (`--conversation-id`), prompt/system input from files or STDIN, retry/timeout controls (`--retries`, `--retry-backoff`, `--timeout`), tuned profiles (`--profile`), and Vertex AI mode (`--vertexai --project ... --location ...`) as documented in `call_genai.py --help`.
+
+Distinct non-zero exit codes are emitted for orchestration:
+- `10`: authentication failures
+- `11`: rate-limit failures
+- `12`: timeout failures
+- `13`: schema validation / JSON-path failures
+- `14`: other API failures
 
 ### Running tests
 Install dev dependencies (including `pytest`) and run:
