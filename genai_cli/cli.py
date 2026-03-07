@@ -276,7 +276,10 @@ def main() -> None:
                 for index, item in enumerate(batch_results, start=1):
                     if args.quiet:
                         if item.get("ok"):
-                            print(item.get("response", ""))
+                            if args.json_path and "selected" in item:
+                                print(_format_selected_value(item.get("selected")))
+                            else:
+                                print(item.get("response", ""))
                         else:
                             print(item.get("error", "unknown error"), file=sys.stderr)
                         continue
@@ -287,6 +290,8 @@ def main() -> None:
                         print(f"id: {item['id']}")
                     if item.get("ok"):
                         print(item.get("response", ""))
+                        if args.json_path and "selected" in item:
+                            print(f"selected: {_format_selected_value(item.get('selected'))}")
                         if args.metrics and item.get("metrics"):
                             print_metrics_text(item["metrics"], quiet=False)
                     else:

@@ -44,6 +44,8 @@ pip install -r requirements.txt                  # install project + test depend
 
 The script supports streaming (`--stream`), document input (`--file`), conversations (`--conversation-id`), prompt/system input from files or STDIN, retry/timeout controls (`--retries`, `--retry-backoff`, `--timeout`), tuned profiles (`--profile`), and Vertex AI mode (`--vertexai --project ... --location ...`) as documented in `call_genai.py --help`.
 
+When using schema mode, `--json-path` can be used in single or batch runs to select one structured value for downstream scripting.
+
 Distinct non-zero exit codes are emitted for orchestration:
 - `10`: authentication failures
 - `11`: rate-limit failures

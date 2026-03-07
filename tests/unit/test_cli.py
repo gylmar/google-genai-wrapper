@@ -224,3 +224,79 @@ def test_main_prompt_file_and_instruction_file(
     assert captured["prompt"] == "file prompt"
     assert captured["generation_config"]["system_instruction"] == "be precise\nreturn json"
     assert capsys.readouterr().out.strip() == "ok"
+
+
+def test_main_batch_quiet_prints_selected_with_json_path(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path,
+) -> None:
+    schema_path = tmp_path / "schema.json"
+    schema_path.write_text('{"type":"object"}')
+    batch_path = tmp_path / "requests.ndjson"
+    batch_path.write_text('{"prompt":"x"}\n')
+
+    monkeypatch.setattr(cli, "load_batch_requests", lambda _: [{"_line_number": 1, "prompt": "x"}])
+    monkeypatch.setattr(
+        cli,
+        "run_batch",
+        lambda **_: [{"ok": True, "line": 1, "response": '{"result":"fallback"}', "selected": "target"}],
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "call_genai.py",
+            "--batch",
+            str(batch_path),
+            "--model",
+            "gemma-3-1b-it",
+            "--response-schema",
+            str(schema_path),
+            "--json-path",
+            "$.result",
+            "--quiet",
+        ],
+    )
+
+    cli.main()
+
+    assert capsys.readouterr().out.strip() == "target"
+
+
+def test_main_batch_text_prints_selected_with_json_path(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path,
+) -> None:
+    schema_path = tmp_path / "schema.json"
+    schema_path.write_text('{"type":"object"}')
+    batch_path = tmp_path / "requests.ndjson"
+    batch_path.write_text('{"prompt":"x"}\n')
+
+    monkeypatch.setattr(cli, "load_batch_requests", lambda _: [{"_line_number": 1, "prompt": "x"}])
+    monkeypatch.setattr(
+        cli,
+        "run_batch",
+        lambda **_: [{"ok": True, "line": 1, "response": '{"result":"fallback"}', "selected": "target"}],
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "call_genai.py",
+            "--batch",
+            str(batch_path),
+            "--model",
+            "gemma-3-1b-it",
+            "--response-schema",
+            str(schema_path),
+            "--json-path",
+            "$.result",
+        ],
+    )
+
+    cli.main()
+
+    out = capsys.readouterr().out
+    assert "selected: target" in out
