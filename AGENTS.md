@@ -27,4 +27,21 @@
    source bin/activate
    pip install -r requirements.txt
    ```
-```
+
+## Initialization checklist
+1. On initialization, read `README.md` before making changes so setup, CLI behavior, and test workflow are aligned with current repo guidance.
+
+## Validation requirements
+1. All future code changes must be validated with unit tests and integration tests before completion.
+2. Run unit tests:
+   ```sh
+   source bin/activate
+   pytest -q
+   ```
+3. Run live integration tests (uses credentials and the low-cost hardcoded model in the suite):
+   ```sh
+   source bin/activate
+   source local.env
+   RUN_LIVE_INTEGRATION=1 pytest -q -m integration
+   ```
+4. If integration tests cannot run (for example, missing credentials), explicitly report that as a blocker in the handoff.

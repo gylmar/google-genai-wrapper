@@ -32,5 +32,19 @@ pip install -r requirements.txt                  # install project dependencies
 
 The script supports streaming (`--stream`), document input (`--file`), conversations (`--conversation-id`), and Vertex AI mode (`--vertexai --project ... --location ...`) as documented in `call_genai.py --help`.
 
+### Running tests
+Install dev dependencies (including `pytest`) and run:
+
+```bash
+pip install -r requirements.txt
+pytest
+```
+
+The default test run executes unit tests only. Live API integration tests are available and use the hardcoded low-cost model `gemma-3-1b-it`; enable them explicitly:
+
+```bash
+RUN_LIVE_INTEGRATION=1 pytest -m integration
+```
+
 ## Check utilization
 https://aistudio.google.com/usage
