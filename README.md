@@ -1,14 +1,23 @@
 ### Overview
 This repo wraps the Google Generative AI SDK (Gemini/Gemma) behind `call_genai.py`. The CLI is ready after creating a Python virtual environment, installing dependencies, and providing your API key or Google Cloud credentials.
 
+### Project structure
+- `call_genai.py`: thin compatibility entrypoint that launches the CLI.
+- `genai_cli/cli.py`: argparse wiring and top-level command flow.
+- `genai_cli/core.py`: API client, content prep, caching, conversations, request execution.
+- `genai_cli/batch.py`: NDJSON batch loading and parallel execution.
+- `genai_cli/schema.py`: JSON schema load/validation helpers.
+- `genai_cli/output.py`: `text/json/ndjson` output formatting helpers.
+- `tests/unit/`: fast unit tests for parsing, schema, batch, core, and CLI behavior.
+- `tests/integration/`: live API integration tests (hardcoded to `gemma-3-1b-it`).
+
 ### Setup commands
-Run the following commands from the repo root. On macOS/Linux, use the shell form shown; Windows command prompt users should adapt the `source` step to `.\.venv\Scripts\activate` and `export`/`unset` steps to `set`.
+Run the following commands from the repo root. On macOS/Linux, use the shell form shown; Windows command prompt users should adapt the `source` step to `.\Scripts\activate` and `export`/`unset` steps to `set`.
 
 ```bash
-python3 -m venv .venv                            # create the virtual environment
-source .venv/bin/activate                        # macOS/Linux; use .\.venv\Scripts\activate on Windows
-python -m pip install --upgrade pip              # optional but recommended to refresh pip
-pip install -r requirements.txt                  # install project dependencies
+source bin/activate                              # activate the repo's virtual environment
+python -m pip install --upgrade pip              # optional but recommended
+pip install -r requirements.txt                  # install project + test dependencies
 ```
 
 ### Running the CLI
