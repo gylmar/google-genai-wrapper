@@ -45,6 +45,9 @@ local.env
 .ruff_cache/
 # Coverage output files
 .coverage
+# Local CLI conversation and response cache
+.genai_conversations/
+.genai_cache/
 
 # OS-specific files
 # macOS

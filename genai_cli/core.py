@@ -26,11 +26,13 @@ except ImportError:
     PIL_AVAILABLE = False
 
 
-CONVERSATIONS_DIR = Path.home() / ".genai_conversations"
-CONVERSATIONS_DIR.mkdir(exist_ok=True)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-CACHE_DIR = Path.home() / ".genai_cache"
-CACHE_DIR.mkdir(exist_ok=True)
+CONVERSATIONS_DIR = PROJECT_ROOT / ".genai_conversations"
+CACHE_DIR = PROJECT_ROOT / ".genai_cache"
+
+CONVERSATIONS_DIR.mkdir(parents=True, exist_ok=True)
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def get_client(
